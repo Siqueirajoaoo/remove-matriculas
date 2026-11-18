@@ -1,0 +1,8 @@
+# Núcleo (OCR + preenchimento com OpenCV + interface web)
+opencv-python-headless>=4.8
+numpy>=1.24
+pillow>=10.0
+rapidocr-onnxruntime>=1.3
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9

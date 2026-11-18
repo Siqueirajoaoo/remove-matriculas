@@ -1,0 +1,3 @@
+# Opcional: preenchimento de alta qualidade (LaMa, usa PyTorch).
+# Instale depois de requirements.txt. Na 1ª execução baixa ~200 MB de pesos.
+simple-lama-inpainting>=0.1.2

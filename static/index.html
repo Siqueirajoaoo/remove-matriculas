@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Remove Matrículas</title>
+  <style>
+    :root {
+      --bg: #f5f6f8; --fg: #1d2330; --muted: #5b6475; --card: #ffffff;
+      --accent: #2563eb; --accent-fg: #ffffff; --border: #d9dde6; --ok: #15803d; --err: #b91c1c;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #12151c; --fg: #e6e9f0; --muted: #9aa3b5; --card: #1b2030;
+        --accent: #3b82f6; --accent-fg: #ffffff; --border: #2c3345; --ok: #4ade80; --err: #f87171;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #12151c; --fg: #e6e9f0; --muted: #9aa3b5; --card: #1b2030;
+      --accent: #3b82f6; --accent-fg: #ffffff; --border: #2c3345; --ok: #4ade80; --err: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-size: 1.6rem; margin: 0 0 4px; }
+    p.lead { margin: 0 0 20px; color: var(--muted); }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px; margin-bottom: 16px;
+    }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    input[type="file"] { flex: 1 1 240px; min-width: 0; color: var(--fg); }
+    button {
+      background: var(--accent); color: var(--accent-fg); border: 0;
+      border-radius: 8px; padding: 10px 16px; font: inherit; cursor: pointer;
+    }
+    button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    #status { margin: 12px 0 0; color: var(--muted); min-height: 1.5em; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+    .item { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+    .item .name { font-size: .9rem; word-break: break-all; margin-bottom: 8px; }
+    .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .pair figure { margin: 0; }
+    .pair img {
+      width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; border-radius: 8px;
+      background: repeating-conic-gradient(#8882 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+    }
+    .pair figcaption { font-size: .75rem; color: var(--muted); margin-top: 2px; }
+    .meta { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: .875rem; }
+    .ok { color: var(--ok); }
+    .err { color: var(--err); }
+    .muted { color: var(--muted); }
+    a.dl { color: var(--accent); }
+    .empty { color: var(--muted); text-align: center; padding: 32px 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Remove Matrículas</h1>
+    <p class="lead">Envie uma ou várias fotos de aviões. A matrícula (ex.: PT-ABC, N123AB, G-ABCD) é apagada de cada uma.</p>
+
+    <section class="card">
+      <div class="toolbar">
+        <input id="files" type="file" accept="image/*" multiple>
+        <button id="run" type="button" disabled>Remover matrículas</button>
+        <button id="zip" type="button" class="secondary" disabled>Baixar todas (ZIP)</button>
+        <button id="clear" type="button" class="secondary" disabled>Limpar</button>
+      </div>
+      <p id="status" role="status"></p>
+    </section>
+
+    <div id="list" class="grid">
+      <p class="empty" id="empty">Nenhuma foto selecionada.</p>
+    </div>
+
+    <p class="muted" style="font-size:.875rem; margin-top:16px">
+      As fotos são processadas uma por vez. A primeira execução pode demorar: os modelos são carregados na memória.
+    </p>
+  </main>
+
+  <script>
+    const filesInput = document.getElementById('files');
+    const runBtn = document.getElementById('run');
+    const zipBtn = document.getElementById('zip');
+    const clearBtn = document.getElementById('clear');
+    const statusEl = document.getElementById('status');
+    const list = document.getElementById('list');
+    const emptyEl = document.getElementById('empty');
+
+    let items = []; // { file, beforeUrl, status: 'pending'|'processing'|'done'|'error', removed, blob, afterUrl, error }
+
+    // ---------- helpers ----------
+    function baseName(name) { return name.replace(/\.[^.]+$/, ''); }
+
+    function el(tag, props = {}, children = []) {
+      const node = document.createElement(tag);
+      Object.assign(node, props);
+      for (const c of children) node.appendChild(c);
+      return node;
+    }
+
+    function setStatus(text) { statusEl.textContent = text; }
+
+    function updateButtons() {
+      const pending = items.some(i => i.status === 'pending' || i.status === 'error');
+      const busy = items.some(i => i.status === 'processing');
+      const done = items.filter(i => i.status === 'done').length;
+      runBtn.disabled = busy || !pending;
+      zipBtn.disabled = busy || done === 0;
+      clearBtn.disabled = busy || items.length === 0;
+      runBtn.textContent = items.length ? `Remover matrículas (${items.filter(i => i.status !== 'done').length})` : 'Remover matrículas';
+    }
+
+    // ---------- rendering ----------
+    function render() {
+      list.innerHTML = '';
+      if (items.length === 0) { list.appendChild(emptyEl); updateButtons(); return; }
+
+      for (const item of items) {
+        const afterFig = el('figure', {}, [
+          el('img', { src: item.afterUrl || '', alt: '' }),
+          el('figcaption', { textContent: item.status === 'processing' ? 'processando…' : 'resultado' }),
+        ]);
+        if (!item.afterUrl) {
+          afterFig.querySelector('img').removeAttribute('src');
+          afterFig.querySelector('img').style.background = 'var(--border)';
+        }
+
+        const meta = el('div', { className: 'meta' });
+        const statusText = {
+          pending: 'aguardando', processing: 'processando…', done: null, error: null,
+        }[item.status];
+        if (item.status === 'done') {
+          const n = item.removed;
+          meta.appendChild(el('span', {
+            className: n === 0 ? 'muted' : 'ok',
+            textContent: n === 0 ? 'nenhuma matrícula' : `${n} matrícula(s) apagada(s)`,
+          }));
+          meta.appendChild(el('a', {
+            className: 'dl', href: item.afterUrl, download: baseName(item.file.name) + '_sem_matricula.png', textContent: 'baixar',
+          }));
+        } else if (item.status === 'error') {
+          meta.appendChild(el('span', { className: 'err', textContent: 'erro: ' + item.error }));
+        } else {
+          meta.appendChild(el('span', { className: 'muted', textContent: statusText }));
+        }
+
+        list.appendChild(el('div', { className: 'item' }, [
+          el('div', { className: 'name', textContent: item.file.name }),
+          el('div', { className: 'pair' }, [
+            el('figure', {}, [
+              el('img', { src: item.beforeUrl, alt: '' }),
+              el('figcaption', { textContent: 'original' }),
+            ]),
+            afterFig,
+          ]),
+          meta,
+        ]));
+      }
+      updateButtons();
+    }
+
+    // ---------- selecting files ----------
+    filesInput.addEventListener('change', () => {
+      if (location.protocol === 'file:') {
+        setStatus('Abra a página pelo servidor: rode "uvicorn app:app --reload" e acesse http://127.0.0.1:8000');
+        return;
+      }
+      const picked = Array.from(filesInput.files || []).filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|webp|bmp|tiff?)$/i.test(f.name));
+      items = picked.map(file => ({ file, beforeUrl: URL.createObjectURL(file), status: 'pending' }));
+      setStatus(picked.length ? `${picked.length} foto(s) selecionada(s).` : 'Nenhuma imagem válida selecionada.');
+      render();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      for (const i of items) { URL.revokeObjectURL(i.beforeUrl); if (i.afterUrl) URL.revokeObjectURL(i.afterUrl); }
+      items = [];
+      filesInput.value = '';
+      setStatus('');
+      render();
+    });
+
+    // ---------- processing (uma foto por vez) ----------
+    async function processItem(item) {
+      item.status = 'processing';
+      render();
+      const body = new FormData();
+      body.append('file', item.file);
+      body.append('boxes', '[]');
+      const response = await fetch('/api/remove', { method: 'POST', body });
+      if (!response.ok) {
+        let message = 'erro ' + response.status;
+        try { message = (await response.json()).detail || message; } catch (_) {}
+        throw new Error(message);
+      }
+      item.removed = parseInt(response.headers.get('X-Regions-Removed') || '0', 10);
+      item.blob = await response.blob();
+      item.afterUrl = URL.createObjectURL(item.blob);
+      item.status = 'done';
+    }
+
+    runBtn.addEventListener('click', async () => {
+      const queue = items.filter(i => i.status === 'pending' || i.status === 'error');
+      if (!queue.length) return;
+      runBtn.disabled = true;
+      let ok = 0, fail = 0;
+      for (let n = 0; n < queue.length; n++) {
+        const item = queue[n];
+        setStatus(`Processando ${n + 1} de ${queue.length}: ${item.file.name}`);
+        try {
+          await processItem(item);
+          ok++;
+        } catch (err) {
+          item.status = 'error';
+          item.error = err.message;
+          fail++;
+        }
+        render();
+      }
+      setStatus(`Concluído: ${ok} foto(s) processada(s)` + (fail ? `, ${fail} com erro.` : '.'));
+      updateButtons();
+    });
+
+    // ---------- ZIP (sem bibliotecas: arquivo "stored", PNG já é comprimido) ----------
+    const CRC_TABLE = (() => {
+      const t = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        t[n] = c >>> 0;
+      }
+      return t;
+    })();
+
+    function crc32(bytes) {
+      let c = 0xFFFFFFFF;
+      for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+      return (c ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    async function buildZip(entries) {
+      const enc = new TextEncoder();
+      const parts = [], central = [];
+      let offset = 0;
+      for (const e of entries) {
+        const data = new Uint8Array(await e.blob.arrayBuffer());
+        const name = enc.encode(e.name);
+        const crc = crc32(data);
+        const size = data.length;
+
+        const lh = new DataView(new ArrayBuffer(30));
+        lh.setUint32(0, 0x04034b50, true);
+        lh.setUint16(4, 20, true);
+        lh.setUint16(6, 0x0800, true); // nomes em UTF-8
+        lh.setUint16(12, 0x21, true);  // data 1980-01-01
+        lh.setUint32(14, crc, true);
+        lh.setUint32(18, size, true);
+        lh.setUint32(22, size, true);
+        lh.setUint16(26, name.length, true);
+        parts.push(new Uint8Array(lh.buffer), name, data);
+
+        const ch = new DataView(new ArrayBuffer(46));
+        ch.setUint32(0, 0x02014b50, true);
+        ch.setUint16(4, 20, true);
+        ch.setUint16(6, 20, true);
+        ch.setUint16(8, 0x0800, true);
+        ch.setUint16(14, 0x21, true);
+        ch.setUint32(16, crc, true);
+        ch.setUint32(20, size, true);
+        ch.setUint32(24, size, true);
+        ch.setUint16(28, name.length, true);
+        ch.setUint32(42, offset, true);
+        central.push(new Uint8Array(ch.buffer), name);
+
+        offset += 30 + name.length + size;
+      }
+      const cdSize = central.reduce((s, p) => s + p.length, 0);
+      const end = new DataView(new ArrayBuffer(22));
+      end.setUint32(0, 0x06054b50, true);
+      end.setUint16(8, entries.length, true);
+      end.setUint16(10, entries.length, true);
+      end.setUint32(12, cdSize, true);
+      end.setUint32(16, offset, true);
+      return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
+    }
+
+    zipBtn.addEventListener('click', async () => {
+      const done = items.filter(i => i.status === 'done');
+      if (!done.length) return;
+      zipBtn.disabled = true;
+      setStatus('Montando o ZIP…');
+      const entries = done.map((item, idx) => ({
+        name: String(idx + 1).padStart(3, '0') + '_' + baseName(item.file.name) + '_sem_matricula.png',
+        blob: item.blob,
+      }));
+      const zip = await buildZip(entries);
+      const a = el('a', { href: URL.createObjectURL(zip), download: 'matriculas_removidas.zip' });
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setStatus(`ZIP com ${done.length} foto(s) baixado.`);
+      updateButtons();
+    });
+
+    render();
+  </script>
+</body>
+</html>
